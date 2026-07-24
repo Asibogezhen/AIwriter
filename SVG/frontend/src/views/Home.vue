@@ -434,7 +434,7 @@ h1 { font-size: 36px; font-weight: 700; background: linear-gradient(135deg,#e0e0
 
 /* Scene cards */
 .scene-list { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.scene-card { flex: 1; min-width: 150px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; cursor: pointer; transition: all 0.2s; }
+.scene-card { flex: 1; min-width: 160px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; cursor: pointer; transition: all 0.2s; overflow: hidden; }
 .scene-card:hover { background: rgba(255,255,255,0.05); }
 .scene-card.active { background: rgba(139,92,246,0.1); border-color: rgba(139,92,246,0.25); }
 .scene-card-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
@@ -447,10 +447,11 @@ h1 { font-size: 36px; font-weight: 700; background: linear-gradient(135deg,#e0e0
 .tool-btn:hover { background: rgba(139,92,246,0.1); color: #c4b5fd; border-color: rgba(139,92,246,0.2); }
 .tool-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.regen-box { display: flex; gap: 4px; margin-top: 8px; }
-.regen-input { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; color: #e0e0e0; padding: 4px 8px; font-size: 12px; outline: none; font-family: inherit; }
-.btn-regen-go { padding: 4px 12px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.3); border-radius: 5px; color: #c4b5fd; font-size: 12px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
-.btn-regen-go:disabled { opacity: 0.5; }
+.regen-box { display: flex; gap: 4px; margin-top: 8px; min-width: 0; }
+.regen-input { flex: 1; min-width: 0; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; color: #e0e0e0; padding: 4px 8px; font-size: 12px; outline: none; font-family: inherit; width: 100%; box-sizing: border-box; }
+.btn-regen-go { flex-shrink: 0; padding: 4px 12px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.3); border-radius: 5px; color: #c4b5fd; font-size: 12px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+.btn-regen-go:hover { background: rgba(139,92,246,0.3); }
+.btn-regen-go:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Preview */
 .preview-container { position: relative; width: 100%; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
