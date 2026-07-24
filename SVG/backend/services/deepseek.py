@@ -202,21 +202,41 @@ async def generate_scene_html(scene: dict, title: str, aspect: str = "16:9", fee
     content = response.choices[0].message.content
     html = _extract_html(content)
 
-    # 检测截断：HTML 不完整则重试一次
+    # 检测截断：HTML 不完整则用精简 prompt 重试
     if not _is_html_complete(html):
         import logging
         logging.getLogger(__name__).warning(f"场景{scene['index']} HTML 被截断，重试中...")
+        short_prompt = f"""用 HTML/CSS 制作 {duration}s 动画页面 {w}x{h}。
+展示文字：「{scene['text']}」
+风格：{scene.get('style_hint', '现代简约')}
+要求：10-15个装饰粒子、完整CSS动画、淡入淡出节奏、z-index文字最上层、禁止JS、禁止body/html/*选择器。
+必须输出完整的 </html> 闭合标签。代码放```html```中。"""
         response = await client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": _animate_prompt(w, h, scene['duration'], style)},
-                {"role": "user", "content": scene_desc + "\n\n注意：输出必须完整，确保 </html> 闭合标签存在，CSS 规则完整。"},
+                {"role": "system", "content": short_prompt},
+                {"role": "user", "content": f"视频主题：{title}，场景：{scene['title']}。确保HTML完整闭合。"},
             ],
             temperature=0.7,
             max_tokens=65536,
         )
         content = response.choices[0].message.content
         html = _extract_html(content)
+
+        # 二次重试：再失败就用更简短的 prompt
+        if not _is_html_complete(html):
+            logging.getLogger(__name__).warning(f"场景{scene['index']} 二次重试...")
+            response = await client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": f"生成{w}x{h}的{duration}秒HTML动画页面。禁止JS。完整闭合</html>。"},
+                    {"role": "user", "content": f"展示文字：「{scene['text']}」。代码放```html中，必须</html>结束。"},
+                ],
+                temperature=0.6,
+                max_tokens=65536,
+            )
+            content = response.choices[0].message.content
+            html = _extract_html(content)
 
     return html
 
