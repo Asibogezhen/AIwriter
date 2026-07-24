@@ -3,7 +3,7 @@ from backend.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 
 client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
 
-MODEL = "deepseek-chat"
+MODEL = "deepseek-v4-pro"
 
 STYLE_PRESETS = {
     "none": "",

@@ -177,13 +177,22 @@ if (!window.__RENDER_MODE) {{
 def _extract_body(html: str) -> str:
     if "<body" in html:
         start = html.index("<body")
-        start = html.index(">", start) + 1
+        try:
+            start = html.index(">", start) + 1
+        except ValueError:
+            # <body 标签可能不完整，尝试跳过
+            start = html.find("\n", start)
+            if start == -1:
+                start = len("<body")
+            else:
+                start += 1
         end = html.find("</body>", start)
         if end == -1:
             end = html.find("</html>", start)
         if end == -1:
             end = len(html)
-        return html[start:end]
+        if start < end:
+            return html[start:end]
     return html
 
 
