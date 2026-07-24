@@ -63,6 +63,31 @@ async function handleGenerate() {
   }
 }
 
+function exportTxt(r: GenerateResponse): string {
+  let text = `标题：${r.title}\n`;
+  text += `完整文案：${r.full_text}\n`;
+  text += `总时长：${r.total_duration}秒\n`;
+  text += `${"=".repeat(40)}\n\n`;
+  let startSec = 0;
+  r.scenes.forEach((s, i) => {
+    text += `【场景 ${i + 1}】${s.title}  (${s.duration}秒)\n`;
+    text += `视觉风格：${s.style_hint}\n`;
+    text += `${s.text}\n\n`;
+    startSec += s.duration;
+  });
+  return text;
+}
+
+function downloadTextFile(content: string, filename: string, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function downloadHtml(html: string, filename: string) {
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
@@ -230,6 +255,9 @@ async function handleRegenerate(idx: number) {
         <div class="result-header">
           <h2>{{ result.title }}</h2>
           <div class="result-actions">
+            <button class="btn-secondary" @click="downloadTextFile(
+              exportTxt(result!), `${result!.title}-分镜脚本.txt`
+            )">导出分镜 TXT</button>
             <button class="btn-secondary" @click="downloadAllHtml">下载全部 HTML</button>
             <button class="btn-primary" :disabled="rendering" @click="downloadAllVideo">
               <span v-if="rendering" class="spinner" />
