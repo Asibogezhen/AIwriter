@@ -68,10 +68,12 @@ export async function renderVideoWithAudio(
   fps = 15,
   ttsText = "",
   ttsVoice = "zh-CN-XiaoxiaoNeural",
+  scenes: object[] = [],
+  scenesHtml: string[] = [],
 ): Promise<Blob> {
   const { data } = await api.post(
     "/render-with-audio",
-    { html, width, height, fps, tts_text: ttsText, tts_voice: ttsVoice },
+    { html, width, height, fps, tts_text: ttsText, tts_voice: ttsVoice, scenes, scenes_html: scenesHtml },
     { responseType: "blob", timeout: 600000 }
   );
   return data;

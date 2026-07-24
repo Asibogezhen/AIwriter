@@ -141,7 +141,7 @@ async function downloadAllVideo() {
   const { w, h } = getRenderSize();
   try {
     const blob = ttsMode.value !== "none"
-      ? await renderVideoWithAudio(result.value.combined_html, w, h, 15, result.value.full_text, ttsMode.value)
+      ? await renderVideoWithAudio(result.value.combined_html, w, h, 15, result.value.full_text, ttsMode.value, result.value.scenes, result.value.scenes_html)
       : await renderVideo(result.value.combined_html, w, h, 15);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -163,7 +163,7 @@ async function downloadSceneVideo(idx: number) {
   const { w, h } = getRenderSize();
   try {
     const blob = ttsMode.value !== "none"
-      ? await renderVideoWithAudio(result.value.scenes_html[idx], w, h, 15, s.text, ttsMode.value)
+      ? await renderVideoWithAudio(result.value.scenes_html[idx], w, h, 15, s.text, ttsMode.value, [result.value.scenes[idx]], [result.value.scenes_html[idx]])
       : await renderVideo(result.value.scenes_html[idx], w, h, 15);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

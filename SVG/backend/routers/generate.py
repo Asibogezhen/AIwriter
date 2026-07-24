@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from backend.services.deepseek import enrich_prompt, generate_scene_html
-from backend.services.tts import generate_tts
+from backend.services.tts import generate_tts, align_scenes_to_audio
 from backend.config import RENDER_SERVICE_URL
 
 router = APIRouter()
@@ -65,10 +65,15 @@ class RenderWithAudioRequest(BaseModel):
     fps: int = 15
     tts_text: str = ""
     tts_voice: str = "zh-CN-XiaoxiaoNeural"
+    scenes: list[dict] = []
+    scenes_html: list[str] = []
 
 
-def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, height: int = 1080, show_subtitles: bool = True) -> str:
-    durations_json = str([s["duration"] for s in plan["scenes"]])
+def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, height: int = 1080, show_subtitles: bool = True, tts_durations: list[float] | None = None) -> str:
+    if tts_durations:
+        durations_json = str(tts_durations)
+    else:
+        durations_json = str([s["duration"] for s in plan["scenes"]])
 
     scene_containers = []
     for i, html in enumerate(scenes_html):
@@ -330,12 +335,13 @@ async def generate_tts_audio(req: TTSRequest):
 
 @router.post("/render-with-audio")
 async def render_video_with_audio(req: RenderWithAudioRequest):
-    """生成 TTS 音频并渲染带音轨的 MP4。"""
+    """生成 TTS 音频并用对齐后的时间轴渲染带字幕+音轨的 MP4。"""
     import base64
     import os
 
     audio_path = None
     try:
+        render_html = req.html
         audio_data_b64 = ""
         if req.tts_text.strip():
             tts_result = await generate_tts(req.tts_text, req.tts_voice)
@@ -343,11 +349,33 @@ async def render_video_with_audio(req: RenderWithAudioRequest):
             with open(audio_path, "rb") as f:
                 audio_data_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+            # 用 TTS 时间戳重建 HTML，字幕与语音对齐
+            if req.scenes and req.scenes_html:
+                alignments = align_scenes_to_audio(
+                    req.tts_text, req.scenes, tts_result["word_boundaries"]
+                )
+                tts_durations = [round(a["end"] - a["start"], 2) for a in alignments]
+                # 确保总时长与音频一致
+                total = sum(tts_durations)
+                audio_dur = tts_result["duration_sec"]
+                if total > 0 and audio_dur > 0 and abs(total - audio_dur) > 1:
+                    scale = audio_dur / total
+                    tts_durations = [round(d * scale, 2) for d in tts_durations]
+
+                plan = {"title": "", "scenes": req.scenes}
+                w, h = req.width, req.height
+                for ratio, (rw, rh) in ASPECTS.items():
+                    if rw == req.width and rh == req.height:
+                        w, h = rw, rh
+                        break
+                render_html = assemble_video_html(req.scenes_html, plan, w, h, True, tts_durations)
+                print(f"[TTS对齐] 场景时长: {tts_durations}, 音频: {audio_dur}s")
+
         async with httpx.AsyncClient(timeout=900.0) as client:
             resp = await client.post(
                 f"{RENDER_SERVICE_URL}/render",
                 json={
-                    "html": req.html,
+                    "html": render_html,
                     "width": req.width,
                     "height": req.height,
                     "fps": req.fps,

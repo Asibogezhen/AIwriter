@@ -64,13 +64,13 @@ def _animate_prompt(width: int, height: int, duration: int, style: str = "none")
 - 可添加极光飘带、流动波纹、星空闪烁等动态背景元素
 
 == 粒子/装饰规则（丰富画面的核心）==
-- 数量：20~35 个装饰元素，分散在画面各处
-- 尺寸：4~40px，大小混合，有大有小才有层次
-- 形状多样化：圆形、十字星(★/+)、菱形、三角、六边形、圆环(border+透明背景)、长条、曲线
-- 用百分比定位（top: 5%~95%，left: 5%~95%），确保在窗口内
+- 数量：10~18 个装饰元素，分散在画面各处
+- 尺寸：8~50px，大小混合
+- 形状多样化：圆形、十字星、菱形、三角、六边形、圆环、长条
+- 用百分比定位（top: 5%~95%，left: 5%~95%）
 - z-index: 1~10，在文字下方
-- 至少 3~5 个"大型背景装饰"：半透明几何图形（大圆、大环、多边形），尺寸 200~500px，带模糊或低透明度，放在画面边缘或角落，作为氛围元素
-- 添加 2~3 条流动的光带或曲线（用细长的 border/outline + border-radius 做异形 + 动画驱动 transform/opacity）
+- 添加 1~3 个大型背景装饰（200~500px，半透明，边缘位置）
+- 添加 1~2 条流动光带
 
 == 动画规则（必须多样化）==
 - 整体节奏：0~{duration*0.15:.0f}s 渐入，{duration*0.15:.0f}s~{duration*0.85:.0f}s 展示，{duration*0.85:.0f}s~{duration}s 淡出
@@ -197,10 +197,41 @@ async def generate_scene_html(scene: dict, title: str, aspect: str = "16:9", fee
             {"role": "user", "content": scene_desc},
         ],
         temperature=0.8,
-        max_tokens=16384,
+        max_tokens=65536,
     )
     content = response.choices[0].message.content
-    return _extract_html(content)
+    html = _extract_html(content)
+
+    # 检测截断：HTML 不完整则重试一次
+    if not _is_html_complete(html):
+        import logging
+        logging.getLogger(__name__).warning(f"场景{scene['index']} HTML 被截断，重试中...")
+        response = await client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": _animate_prompt(w, h, scene['duration'], style)},
+                {"role": "user", "content": scene_desc + "\n\n注意：输出必须完整，确保 </html> 闭合标签存在，CSS 规则完整。"},
+            ],
+            temperature=0.7,
+            max_tokens=65536,
+        )
+        content = response.choices[0].message.content
+        html = _extract_html(content)
+
+    return html
+
+
+def _is_html_complete(html: str) -> bool:
+    """检查 HTML 是否完整：有 </html> 闭合标签，没有明显截断。"""
+    if not html:
+        return False
+    if not html.rstrip().endswith("</html>"):
+        return False
+    # CSS 规则不应该在中途截断（检查最后 50 字符）
+    tail = html[-50:].strip()
+    if tail and tail[-1] not in "}>;\n ":
+        return False
+    return True
 
 
 def _extract_html(content: str) -> str:
