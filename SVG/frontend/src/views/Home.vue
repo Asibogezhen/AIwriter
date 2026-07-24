@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { generateAnimation, regenerateScene, renderVideo, type GenerateResponse } from "../api/index";
+import { generateAnimation, regenerateScene, renderVideo, generateTTS, renderVideoWithAudio, type GenerateResponse } from "../api/index";
 
 const ASPECTS = [
   { key: "16:9", label: "横屏 16:9", icon: "▭", w: 1920, h: 1080 },
@@ -16,6 +16,15 @@ const STYLE_PRESETS = [
   { key: "flat", label: "扁平化", hint: "商业汇报、产品介绍" },
   { key: "3d", label: "3D质感", hint: "品牌宣传、高端展示" },
   { key: "handdrawn", label: "手绘风", hint: "儿童科普、趣味故事" },
+];
+
+const TTS_VOICES = [
+  { key: "none", label: "无语音" },
+  { key: "zh-CN-XiaoxiaoNeural", label: "晓晓 (温暖女声)" },
+  { key: "zh-CN-YunxiNeural", label: "云希 (活泼男声)" },
+  { key: "zh-CN-XiaoyiNeural", label: "晓伊 (活泼女声)" },
+  { key: "zh-CN-YunjianNeural", label: "云健 (激情男声)" },
+  { key: "zh-CN-YunxiaNeural", label: "云夏 (可爱童声)" },
 ];
 
 const prompt = ref("");
@@ -129,7 +138,20 @@ async function downloadAllVideo() {
   if (!result.value) return;
   rendering.value = true;
   error.value = "";
-  await downloadVideo(result.value.combined_html, `${result.value.title}.mp4`);
+  const { w, h } = getRenderSize();
+  try {
+    const blob = ttsMode.value !== "none"
+      ? await renderVideoWithAudio(result.value.combined_html, w, h, 15, result.value.full_text, ttsMode.value)
+      : await renderVideo(result.value.combined_html, w, h, 15);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${result.value.title}.mp4`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e: any) {
+    error.value = e.response?.data?.detail || e.message || "视频渲染失败";
+  }
   rendering.value = false;
 }
 
@@ -138,8 +160,39 @@ async function downloadSceneVideo(idx: number) {
   renderingScene.value = idx;
   error.value = "";
   const s = result.value.scenes[idx];
-  await downloadVideo(result.value.scenes_html[idx], `场景${idx + 1}-${s.title}.mp4`);
+  const { w, h } = getRenderSize();
+  try {
+    const blob = ttsMode.value !== "none"
+      ? await renderVideoWithAudio(result.value.scenes_html[idx], w, h, 15, s.text, ttsMode.value)
+      : await renderVideo(result.value.scenes_html[idx], w, h, 15);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `场景${idx + 1}-${s.title}.mp4`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e: any) {
+    error.value = e.response?.data?.detail || e.message || "视频渲染失败";
+  }
   renderingScene.value = -1;
+}
+
+const ttsPreviewing = ref(false);
+
+async function previewTTS() {
+  if (!result.value || ttsMode.value === "none") return;
+  ttsPreviewing.value = true;
+  try {
+    const blob = await generateTTS(result.value.full_text, ttsMode.value);
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    await audio.play();
+    URL.revokeObjectURL(url);
+  } catch (e: any) {
+    error.value = "TTS 预览失败: " + (e.message || e);
+  } finally {
+    ttsPreviewing.value = false;
+  }
 }
 
 function toggleRegenInput(idx: number) {
@@ -218,8 +271,7 @@ async function handleRegenerate(idx: number) {
               <div class="tts-select">
                 <span class="label">语音</span>
                 <select v-model="ttsMode">
-                  <option value="none">无语音</option>
-                  <option value="chattts">ChatTTS</option>
+                  <option v-for="v in TTS_VOICES" :key="v.key" :value="v.key">{{ v.label }}</option>
                 </select>
               </div>
               <div class="subtitle-toggle">
@@ -259,6 +311,10 @@ async function handleRegenerate(idx: number) {
               exportTxt(result!), `${result!.title}-分镜脚本.txt`
             )">导出分镜 TXT</button>
             <button class="btn-secondary" @click="downloadAllHtml">下载全部 HTML</button>
+            <button v-if="ttsMode !== 'none'" class="btn-secondary" :disabled="ttsPreviewing" @click="previewTTS">
+              <span v-if="ttsPreviewing" class="spinner-small" />
+              {{ ttsPreviewing ? "预览中..." : "预览语音" }}
+            </button>
             <button class="btn-primary" :disabled="rendering" @click="downloadAllVideo">
               <span v-if="rendering" class="spinner" />
               {{ rendering ? "渲染中..." : "下载全部 MP4" }}

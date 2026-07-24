@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from backend.services.deepseek import enrich_prompt, generate_scene_html
+from backend.services.tts import generate_tts
 from backend.config import RENDER_SERVICE_URL
 
 router = APIRouter()
@@ -50,6 +51,20 @@ class RenderRequest(BaseModel):
     width: int = 1280
     height: int = 720
     fps: int = 15
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "zh-CN-XiaoxiaoNeural"
+
+
+class RenderWithAudioRequest(BaseModel):
+    html: str
+    width: int = 1280
+    height: int = 720
+    fps: int = 15
+    tts_text: str = ""
+    tts_voice: str = "zh-CN-XiaoxiaoNeural"
 
 
 def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, height: int = 1080, show_subtitles: bool = True) -> str:
@@ -278,3 +293,73 @@ async def render_video(req: RenderRequest):
         raise HTTPException(status_code=503, detail="渲染服务未启动")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"渲染异常: {str(e)}")
+
+
+@router.post("/generate-tts")
+async def generate_tts_audio(req: TTSRequest):
+    """生成 TTS 预览音频，返回 MP3 字节。"""
+    import os
+
+    tts_result = await generate_tts(req.text, req.voice)
+    try:
+        with open(tts_result["audio_path"], "rb") as f:
+            audio_bytes = f.read()
+
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={
+                "X-Audio-Duration": str(tts_result["duration_sec"]),
+                "X-Audio-Voice": tts_result["voice"],
+                "Content-Disposition": "attachment; filename=voiceover.mp3",
+            },
+        )
+    finally:
+        if os.path.exists(tts_result["audio_path"]):
+            os.unlink(tts_result["audio_path"])
+
+
+@router.post("/render-with-audio")
+async def render_video_with_audio(req: RenderWithAudioRequest):
+    """生成 TTS 音频并渲染带音轨的 MP4。"""
+    import base64
+    import os
+
+    audio_path = None
+    try:
+        audio_data_b64 = ""
+        if req.tts_text.strip():
+            tts_result = await generate_tts(req.tts_text, req.tts_voice)
+            audio_path = tts_result["audio_path"]
+            with open(audio_path, "rb") as f:
+                audio_data_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        async with httpx.AsyncClient(timeout=900.0) as client:
+            resp = await client.post(
+                f"{RENDER_SERVICE_URL}/render",
+                json={
+                    "html": req.html,
+                    "width": req.width,
+                    "height": req.height,
+                    "fps": req.fps,
+                    "audio_base64": audio_data_b64,
+                },
+            )
+            if resp.status_code != 200:
+                detail = resp.text
+                try:
+                    detail = resp.json().get("error", resp.text)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=resp.status_code, detail=f"渲染失败: {detail}")
+            return Response(content=resp.content, media_type="video/mp4")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="渲染服务未启动")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"渲染异常: {str(e)}")
+    finally:
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.unlink(audio_path)
+            except Exception:
+                pass

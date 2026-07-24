@@ -51,3 +51,28 @@ export async function renderVideo(html: string, width = 1280, height = 720, fps 
   );
   return data;
 }
+
+export async function generateTTS(text: string, voice = "zh-CN-XiaoxiaoNeural"): Promise<Blob> {
+  const { data } = await api.post(
+    "/generate-tts",
+    { text, voice },
+    { responseType: "blob", timeout: 120000 }
+  );
+  return data;
+}
+
+export async function renderVideoWithAudio(
+  html: string,
+  width = 1280,
+  height = 720,
+  fps = 15,
+  ttsText = "",
+  ttsVoice = "zh-CN-XiaoxiaoNeural",
+): Promise<Blob> {
+  const { data } = await api.post(
+    "/render-with-audio",
+    { html, width, height, fps, tts_text: ttsText, tts_voice: ttsVoice },
+    { responseType: "blob", timeout: 600000 }
+  );
+  return data;
+}
