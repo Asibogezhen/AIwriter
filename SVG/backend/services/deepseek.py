@@ -206,7 +206,7 @@ async def generate_scene_html(scene: dict, title: str, aspect: str = "16:9", fee
     if not _is_html_complete(html):
         import logging
         logging.getLogger(__name__).warning(f"场景{scene['index']} HTML 被截断，重试中...")
-        short_prompt = f"""用 HTML/CSS 制作 {duration}s 动画页面 {w}x{h}。
+        short_prompt = f"""用 HTML/CSS 制作 {scene['duration']}s 动画页面 {w}x{h}。
 展示文字：「{scene['text']}」
 风格：{scene.get('style_hint', '现代简约')}
 要求：10-15个装饰粒子、完整CSS动画、淡入淡出节奏、z-index文字最上层、禁止JS、禁止body/html/*选择器。
@@ -229,7 +229,7 @@ async def generate_scene_html(scene: dict, title: str, aspect: str = "16:9", fee
             response = await client.chat.completions.create(
                 model=MODEL,
                 messages=[
-                    {"role": "system", "content": f"生成{w}x{h}的{duration}秒HTML动画页面。禁止JS。完整闭合</html>。"},
+                    {"role": "system", "content": f"生成{w}x{h}的{scene['duration']}秒HTML动画页面。禁止JS。完整闭合</html>。"},
                     {"role": "user", "content": f"展示文字：「{scene['text']}」。代码放```html中，必须</html>结束。"},
                 ],
                 temperature=0.6,
