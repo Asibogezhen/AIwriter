@@ -6,6 +6,7 @@ dist/
 .vite/
 *.mp4
 *.gif
+!导出示例*.mp4
 backend/data/*
 !backend/data/history/
 backend/data/history/*
