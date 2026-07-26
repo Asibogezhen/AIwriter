@@ -1,7 +1,11 @@
 from openai import AsyncOpenAI
 from backend.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 
-client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+client = AsyncOpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url=DEEPSEEK_BASE_URL,
+    timeout=300.0,  # 5 分钟单次请求超时
+)
 
 MODEL = "deepseek-v4-pro"
 
@@ -17,32 +21,48 @@ STYLE_PRESETS = {
 
 
 def _get_system_prompt_enrich(style: str = "none") -> str:
-    base = """你是一个专业的视频文案策划师。用户会给你一个主题或简单描述，请你：
+    base = """你是一个专业的视频文案策划师。用户会给你一个主题或简单描述。请按以下流程创作视频：
 
-1. 将用户的简单想法扩展为一段完整的视频文案（400-800字），确保内容准确、符合事实
-2. 将文案拆分为6-10个场景（尽量细致，每个场景聚焦一个要点），每个场景包含：
-   - 场景标题
-   - 场景文字内容（用于动画展示，每场景1-3句话，必须是简洁有力的展示语句）
-   - 建议时长（秒），每个场景时长尽量均匀，控制在4-8秒之间
-   - 视觉风格建议（颜色、氛围）
+== 第一步：写旁白文案 ==
+先写一段完整的视频旁白/解说词（400-800字）。这段文字将被语音合成朗读，也就是视频的"台词"。
+- 语言流畅自然，像纪录片旁白一样娓娓道来
+- 不要用 markdown、编号列表，纯粹的自然段落
+- 涉科学/历史/技术等事实性内容必须确保准确
 
-重要：如果用户描述涉及科学、历史、技术等事实性内容，必须确保准确。如果涉及虚构或艺术创作，可以自由发挥。
+== 第二步：按旁白分镜 ==
+将旁白文案按语义拆分为6-10个场景。每个场景必须对应该段旁白的内容——画面要和"此刻正在说的话"一致。
+- 场景数量 = 旁白自然分段的段数（按话题转换点切分）
+- 每个场景的时长按该段旁白的字数计算：中文朗读速度约3.5字/秒。例如一段35字的旁白约10秒
+- 每段旁白字数相近则时长相近，字数多的场景时长相应增加
+- total_duration 应等于所有场景时长之和，也必须等于 full_text 字数/3.5 的估算值
 
-按以下JSON格式返回（只返回JSON，不要其他内容）：
+每个场景包含：
+- title: 场景标题（简练概括）
+- text: 画面展示文字（该段旁白的核心要点，1-2句，用于动画展示，不是完整旁白）
+- duration: 时长（秒），= 该段旁白字数/3.5，结果四舍五入
+- style_hint: 视觉风格（配色、氛围、元素）
+
+== 输出格式 ==
+只返回JSON，不要其他内容：
 {
   "title": "视频标题",
-  "full_text": "完整文案",
+  "full_text": "完整旁白文案（连续朗读文本）",
   "scenes": [
     {
       "index": 1,
       "title": "场景标题",
-      "text": "展示文字内容",
-      "duration": 5,
+      "text": "画面展示文字（该段旁白的核心提炼）",
+      "duration": 8,
       "style_hint": "深蓝色背景，金色文字，科技感"
     }
   ],
-  "total_duration": 25
-}"""
+  "total_duration": 50
+}
+
+关键约束：
+- full_text 是所有场景旁白的连续拼接（TTS 将从这里朗读）
+- 每个场景的旁白段落在 full_text 中按顺序出现
+- 场景 text 是旁白的提炼（短），full_text 是完整旁白（长），两者必须对应同一主题"""
     style_desc = STYLE_PRESETS.get(style, "")
     if style_desc:
         base += f"\n\n全局视觉风格要求：{style_desc}\n请确保每个场景的 style_hint 充分体现此风格特点，配色和氛围描述中融入此风格的关键视觉元素。"

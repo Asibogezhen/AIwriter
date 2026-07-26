@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from backend.services.deepseek import enrich_prompt, generate_scene_html
-from backend.services.tts import generate_tts, align_scenes_to_audio
+from backend.services.tts import generate_tts, align_scenes_to_audio, generate_ass
+from backend.services.history import save_generation
 from backend.config import RENDER_SERVICE_URL
 
 router = APIRouter()
@@ -25,6 +26,7 @@ class GenerateRequest(BaseModel):
 
 
 class GenerateResponse(BaseModel):
+    id: str = ""
     title: str
     full_text: str
     scenes: list[dict]
@@ -53,6 +55,14 @@ class RenderRequest(BaseModel):
     fps: int = 15
 
 
+class RenderAllRequest(BaseModel):
+    scenes_html: list[str]
+    durations: list[float] = []
+    width: int = 1280
+    height: int = 720
+    fps: int = 24
+
+
 class TTSRequest(BaseModel):
     text: str
     voice: str = "zh-CN-XiaoxiaoNeural"
@@ -67,9 +77,10 @@ class RenderWithAudioRequest(BaseModel):
     tts_voice: str = "zh-CN-XiaoxiaoNeural"
     scenes: list[dict] = []
     scenes_html: list[str] = []
+    subtitles: bool = True
 
 
-def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, height: int = 1080, show_subtitles: bool = True, tts_durations: list[float] | None = None) -> str:
+def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, height: int = 1080, tts_durations: list[float] | None = None, total_duration_override: float | None = None) -> str:
     if tts_durations:
         durations_json = str(tts_durations)
     else:
@@ -82,29 +93,6 @@ def assemble_video_html(scenes_html: list[str], plan: dict, width: int = 1920, h
         scene_containers.append(
             f'<div class="scene-box" id="scene-{i}">\n{styles}\n{body}\n</div>'
         )
-
-    subtitles_json = "[]"
-    subtitle_html = ""
-    if show_subtitles:
-        subs = []
-        cumulative = 0
-        for s in plan["scenes"]:
-            subs.append({"text": s["text"], "start": cumulative, "end": cumulative + s["duration"]})
-            cumulative += s["duration"]
-        subtitles_json = str(subs)
-        bottom_margin = int(height * 0.06)
-        pad_v = int(height * 0.015)
-        pad_h = int(width * 0.04)
-        font_sz = int(width * 0.022)
-        max_w = int(width * 0.78)
-        subtitle_html = f"""<div id="subtitle-overlay" style="
-  position:absolute; bottom:{bottom_margin}px; left:50%; transform:translateX(-50%);
-  background:rgba(0,0,0,0.72); color:#fff; padding:{pad_v}px {pad_h}px;
-  border-radius:10px; font-size:{font_sz}px; line-height:1.4; max-width:{max_w}px;
-  text-align:center; z-index:999; pointer-events:none;
-  font-family:'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif;
-  word-break:break-word;
-"> </div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -122,25 +110,19 @@ body {{ background:#000; display:flex; justify-content:center; align-items:cente
 </head>
 <body>
 <div class="stage">
-{subtitle_html}
 {''.join(scene_containers)}
 </div>
 <script>
 var __durations = {durations_json};
-var __totalDuration = __durations.reduce(function(a,b){{return a+b;}}, 0);
+var __totalDuration = {"total_duration_override" if total_duration_override else "__durations.reduce(function(a,b){{return a+b;}}, 0)"};
 var __currentScene = -1;
 var __startTime = null;
-var __subtitles = {subtitles_json};
 
 function __showScene(idx) {{
   var boxes = document.querySelectorAll('.scene-box');
   boxes.forEach(function(b){{ b.classList.remove('active'); }});
   if (boxes[idx]) boxes[idx].classList.add('active');
   __currentScene = idx;
-  var subEl = document.getElementById('subtitle-overlay');
-  if (subEl && __subtitles[idx]) {{
-    subEl.textContent = __subtitles[idx].text;
-  }}
 }}
 
 function __seekTo(t) {{
@@ -250,9 +232,29 @@ async def generate_animation(req: GenerateRequest):
     scenes_html = await asyncio.gather(*[gen_one(s) for s in plan["scenes"]])
 
     w, h = ASPECTS.get(req.aspect, ASPECTS["16:9"])
-    combined = assemble_video_html(scenes_html, plan, w, h, req.subtitles)
+    combined = assemble_video_html(scenes_html, plan, w, h)
+
+    # 自动保存到历史记录
+    gid = ""
+    try:
+        gid = save_generation({
+            "prompt": req.prompt,
+            "title": plan["title"],
+            "full_text": plan["full_text"],
+            "scenes": plan["scenes"],
+            "total_duration": plan["total_duration"],
+            "combined_html": combined,
+            "scenes_html": scenes_html,
+            "width": w,
+            "height": h,
+            "aspect": req.aspect,
+            "style": req.style,
+        })
+    except Exception as e:
+        print(f"[历史] 保存失败: {e}")
 
     return GenerateResponse(
+        id=gid,
         title=plan["title"],
         full_text=plan["full_text"],
         scenes=plan["scenes"],
@@ -335,7 +337,7 @@ async def generate_tts_audio(req: TTSRequest):
 
 @router.post("/render-with-audio")
 async def render_video_with_audio(req: RenderWithAudioRequest):
-    """生成 TTS 音频并用对齐后的时间轴渲染带字幕+音轨的 MP4。"""
+    """独立控制语音/字幕：可纯音频、纯字幕、两者、或纯视频。"""
     import base64
     import os
 
@@ -343,24 +345,40 @@ async def render_video_with_audio(req: RenderWithAudioRequest):
     try:
         render_html = req.html
         audio_data_b64 = ""
-        if req.tts_text.strip():
-            tts_result = await generate_tts(req.tts_text, req.tts_voice)
-            audio_path = tts_result["audio_path"]
-            with open(audio_path, "rb") as f:
-                audio_data_b64 = base64.b64encode(f.read()).decode("utf-8")
+        subtitle_content = ""
 
-            # 用 TTS 时间戳重建 HTML，字幕与语音对齐
+        needs_audio = bool(req.tts_voice and req.tts_voice not in ("", "none"))
+        needs_subs = req.subtitles
+        needs_tts = bool(req.tts_text.strip() and (needs_audio or needs_subs))
+
+        if needs_tts:
+            # 生成 TTS 获取时间戳（纯字幕模式用默认语音，音频不保留）
+            tts_voice = req.tts_voice if needs_audio else "zh-CN-XiaoxiaoNeural"
+            tts_result = await generate_tts(req.tts_text, tts_voice)
+            audio_path = tts_result["audio_path"]
+
+            if needs_audio:
+                with open(audio_path, "rb") as f:
+                    audio_data_b64 = base64.b64encode(f.read()).decode("utf-8")
+                print(f"[TTS] 语音: {tts_voice}, 时长: {tts_result['duration_sec']:.1f}s")
+
+            if needs_subs:
+                subtitle_content = generate_ass(tts_result["word_boundaries"], req.tts_text)
+                line_count = subtitle_content.count("Dialogue:") if subtitle_content else 0
+                print(f"[ASS] 字幕: {line_count} 条")
+
+            # 用 TTS 时间戳重建 HTML，场景切换与语音对齐
             if req.scenes and req.scenes_html:
+                audio_dur = tts_result["duration_sec"]
                 alignments = align_scenes_to_audio(
                     req.tts_text, req.scenes, tts_result["word_boundaries"]
                 )
                 tts_durations = [round(a["end"] - a["start"], 2) for a in alignments]
-                # 确保总时长与音频一致
                 total = sum(tts_durations)
-                audio_dur = tts_result["duration_sec"]
-                if total > 0 and audio_dur > 0 and abs(total - audio_dur) > 1:
-                    scale = audio_dur / total
+                if total > 0 and audio_dur > 0 and abs(total - audio_dur) > 0.1:
+                    scale = audio_dur / max(total, 0.01)
                     tts_durations = [round(d * scale, 2) for d in tts_durations]
+                    tts_durations[-1] = round(audio_dur - sum(tts_durations[:-1]), 2)
 
                 plan = {"title": "", "scenes": req.scenes}
                 w, h = req.width, req.height
@@ -368,8 +386,8 @@ async def render_video_with_audio(req: RenderWithAudioRequest):
                     if rw == req.width and rh == req.height:
                         w, h = rw, rh
                         break
-                render_html = assemble_video_html(req.scenes_html, plan, w, h, True, tts_durations)
-                print(f"[TTS对齐] 场景时长: {tts_durations}, 音频: {audio_dur}s")
+                render_html = assemble_video_html(req.scenes_html, plan, w, h, tts_durations, audio_dur)
+                print(f"[对齐] 场景时长={tts_durations}, 总={sum(tts_durations):.1f}s, 参考={audio_dur:.1f}s")
 
         async with httpx.AsyncClient(timeout=900.0) as client:
             resp = await client.post(
@@ -380,6 +398,7 @@ async def render_video_with_audio(req: RenderWithAudioRequest):
                     "height": req.height,
                     "fps": req.fps,
                     "audio_base64": audio_data_b64,
+                    "subtitle_content": subtitle_content,
                 },
             )
             if resp.status_code != 200:
@@ -400,3 +419,27 @@ async def render_video_with_audio(req: RenderWithAudioRequest):
                 os.unlink(audio_path)
             except Exception:
                 pass
+
+
+@router.post("/render-all")
+async def render_all_scenes(req: RenderAllRequest):
+    """逐场景独立渲染为 MP4，拼接为完整视频（纯视频，无音频字幕）。"""
+    async with httpx.AsyncClient(timeout=900.0) as client:
+        resp = await client.post(
+            f"{RENDER_SERVICE_URL}/render-all",
+            json={
+                "scenes_html": req.scenes_html,
+                "durations": req.durations or None,
+                "width": req.width,
+                "height": req.height,
+                "fps": req.fps,
+            },
+        )
+        if resp.status_code != 200:
+            detail = resp.text
+            try:
+                detail = resp.json().get("error", resp.text)
+            except Exception:
+                pass
+            raise HTTPException(status_code=resp.status_code, detail=f"渲染失败: {detail}")
+        return Response(content=resp.content, media_type="video/mp4")

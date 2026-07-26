@@ -1,0 +1,31 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - RENDER_SERVICE_URL=http://render-service:3001
+    volumes:
+      - backend_data:/app/backend/data
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+
+  render-service:
+    build: ./render-service
+    ports:
+      - "3002:3001"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - backend
+      - render-service
+    restart: unless-stopped
+
+volumes:
+  backend_data:

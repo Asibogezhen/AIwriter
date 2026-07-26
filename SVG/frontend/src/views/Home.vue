@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { generateAnimation, regenerateScene, renderVideo, generateTTS, renderVideoWithAudio, type GenerateResponse } from "../api/index";
+import { ref, computed, onMounted, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { generateAnimation, regenerateScene, renderVideo, generateTTS, renderVideoWithAudio, renderAllScenes, getHistory, getHistoryEntry, deleteHistoryEntry, type GenerateResponse, type HistoryEntry } from "../api/index";
+
+const route = useRoute();
+const router = useRouter();
 
 const ASPECTS = [
   { key: "16:9", label: "横屏 16:9", icon: "▭", w: 1920, h: 1080 },
@@ -41,12 +45,118 @@ const activeScene = ref(0);
 const regenerating = ref<Record<number, boolean>>({});
 const showRegenInput = ref<Record<number, boolean>>({});
 const regenFeedback = ref<Record<number, string>>({});
+const showHistory = ref(false);
+const historyList = ref<HistoryEntry[]>([]);
+const historyLoading = ref(false);
+
+async function loadHistory() {
+  historyLoading.value = true;
+  try {
+    historyList.value = await getHistory();
+  } catch { /* ignore */ }
+  historyLoading.value = false;
+}
+
+async function restoreHistory(id: string) {
+  loading.value = true;
+  error.value = "";
+  try {
+    const entry = await getHistoryEntry(id);
+    result.value = {
+      id: entry.id,
+      title: entry.title,
+      full_text: entry.full_text,
+      scenes: entry.scenes,
+      total_duration: entry.total_duration,
+      combined_html: entry.combined_html,
+      scenes_html: entry.scenes_html,
+      width: entry.width,
+      height: entry.height,
+      style: entry.style || "none",
+    };
+    activeScene.value = 0;
+    showHistory.value = false;
+    if (entry.style) style.value = entry.style;
+    if (entry.aspect) aspect.value = entry.aspect;
+    router.push(`/result/${id}`);
+  } catch (e: any) {
+    error.value = "加载历史记录失败";
+  }
+  loading.value = false;
+}
+
+async function removeHistory(id: string) {
+  try {
+    await deleteHistoryEntry(id);
+    historyList.value = historyList.value.filter(h => h.id !== id);
+  } catch { /* ignore */ }
+}
 
 const aspectCfg = computed(() => ASPECTS.find((a) => a.key === aspect.value) || ASPECTS[0]);
 
 const currentSceneHtml = computed(() => {
   if (!result.value?.scenes_html) return "";
   return result.value.scenes_html[activeScene.value] || "";
+});
+
+const isResultPage = computed(() => !!route.params.id);
+
+onMounted(async () => {
+  const id = route.params.id as string;
+  if (id) {
+    loading.value = true;
+    try {
+      const entry = await getHistoryEntry(id);
+      result.value = {
+        id: entry.id,
+        title: entry.title,
+        full_text: entry.full_text,
+        scenes: entry.scenes,
+        total_duration: entry.total_duration,
+        combined_html: entry.combined_html,
+        scenes_html: entry.scenes_html,
+        width: entry.width,
+        height: entry.height,
+        style: entry.style || "none",
+      };
+      if (entry.style) style.value = entry.style;
+      if (entry.aspect) aspect.value = entry.aspect;
+      if (entry.prompt) prompt.value = entry.prompt;
+    } catch {
+      error.value = "加载失败，记录可能已被删除";
+      router.replace("/");
+    }
+    loading.value = false;
+  }
+});
+
+watch(() => route.params.id, async (newId) => {
+  if (newId && typeof newId === 'string' && result.value?.id !== newId) {
+    loading.value = true;
+    try {
+      const entry = await getHistoryEntry(newId);
+      result.value = {
+        id: entry.id,
+        title: entry.title,
+        full_text: entry.full_text,
+        scenes: entry.scenes,
+        total_duration: entry.total_duration,
+        combined_html: entry.combined_html,
+        scenes_html: entry.scenes_html,
+        width: entry.width,
+        height: entry.height,
+        style: entry.style || "none",
+      };
+      if (entry.style) style.value = entry.style;
+      if (entry.aspect) aspect.value = entry.aspect;
+      if (entry.prompt) prompt.value = entry.prompt;
+      showHistory.value = false;
+    } catch {
+      error.value = "加载失败";
+      router.replace("/");
+    }
+    loading.value = false;
+  }
 });
 
 const canGenerate = computed(() => prompt.value.trim().length > 0 && !loading.value);
@@ -65,6 +175,7 @@ async function handleGenerate() {
   try {
     result.value = await generateAnimation(prompt.value, ttsMode.value, aspect.value, style.value, showSubtitles.value);
     activeScene.value = 0;
+    if (result.value.id) router.push(`/result/${result.value.id}`);
   } catch (e: any) {
     error.value = e.response?.data?.detail || e.message || "生成失败";
   } finally {
@@ -118,31 +229,13 @@ function downloadSceneHtml(idx: number) {
   downloadHtml(result.value.scenes_html[idx], `场景${idx + 1}-${s.title}.html`);
 }
 
-async function downloadVideo(html: string, filename: string) {
-  if (!result.value) return;
-  const { w, h } = getRenderSize();
-  try {
-    const blob = await renderVideo(html, w, h, 15);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  } catch (e: any) {
-    error.value = e.response?.data?.detail || e.message || "视频渲染失败";
-  }
-}
-
 async function downloadAllVideo() {
   if (!result.value) return;
   rendering.value = true;
   error.value = "";
   const { w, h } = getRenderSize();
   try {
-    const blob = ttsMode.value !== "none"
-      ? await renderVideoWithAudio(result.value.combined_html, w, h, 15, result.value.full_text, ttsMode.value, result.value.scenes, result.value.scenes_html)
-      : await renderVideo(result.value.combined_html, w, h, 15);
+    const blob = await renderAllScenes(result.value.scenes_html, w, h);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -161,9 +254,10 @@ async function downloadSceneVideo(idx: number) {
   error.value = "";
   const s = result.value.scenes[idx];
   const { w, h } = getRenderSize();
+  const needAudioOrSubs = ttsMode.value !== "none" || showSubtitles.value;
   try {
-    const blob = ttsMode.value !== "none"
-      ? await renderVideoWithAudio(result.value.scenes_html[idx], w, h, 15, s.text, ttsMode.value, [result.value.scenes[idx]], [result.value.scenes_html[idx]])
+    const blob = needAudioOrSubs
+      ? await renderVideoWithAudio(result.value.scenes_html[idx], w, h, 15, s.text, ttsMode.value, [result.value.scenes[idx]], [result.value.scenes_html[idx]], showSubtitles.value)
       : await renderVideo(result.value.scenes_html[idx], w, h, 15);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -190,6 +284,24 @@ async function previewTTS() {
     URL.revokeObjectURL(url);
   } catch (e: any) {
     error.value = "TTS 预览失败: " + (e.message || e);
+  } finally {
+    ttsPreviewing.value = false;
+  }
+}
+
+async function downloadTTS() {
+  if (!result.value || ttsMode.value === "none") return;
+  ttsPreviewing.value = true;
+  try {
+    const blob = await generateTTS(result.value.full_text, ttsMode.value);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${result.value.title}-配音.mp3`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e: any) {
+    error.value = "TTS 下载失败: " + (e.message || e);
   } finally {
     ttsPreviewing.value = false;
   }
@@ -240,6 +352,9 @@ async function handleRegenerate(idx: number) {
         </svg>
         <span class="logo-text">SVG AI 动画生成器</span>
       </div>
+      <button class="btn-history" @click="showHistory = !showHistory; if (showHistory) loadHistory()" :title="showHistory ? '关闭历史' : '历史记录'">
+        {{ showHistory ? '✕ 关闭' : '📋 历史' }}
+      </button>
     </header>
 
     <main class="main">
@@ -276,8 +391,9 @@ async function handleRegenerate(idx: number) {
               </div>
               <div class="subtitle-toggle">
                 <span class="label">字幕</span>
-                <button class="toggle-btn" :class="{ on: showSubtitles }" @click="showSubtitles = !showSubtitles"
-                  :title="showSubtitles ? '已开启字幕' : '已关闭字幕'">
+                <button class="toggle-btn" :class="{ on: showSubtitles }"
+                  @click="showSubtitles = !showSubtitles"
+                  :title="showSubtitles ? '字幕将烧录到 MP4' : '不生成字幕'">
                   {{ showSubtitles ? '开' : '关' }}
                 </button>
               </div>
@@ -305,7 +421,10 @@ async function handleRegenerate(idx: number) {
       <!-- Result -->
       <section v-if="result" class="result-section">
         <div class="result-header">
-          <h2>{{ result.title }}</h2>
+          <div>
+            <button v-if="isResultPage" class="back-btn" @click="router.push('/')">← 返回首页</button>
+            <h2>{{ result.title }}</h2>
+          </div>
           <div class="result-actions">
             <button class="btn-secondary" @click="downloadTextFile(
               exportTxt(result!), `${result!.title}-分镜脚本.txt`
@@ -313,7 +432,10 @@ async function handleRegenerate(idx: number) {
             <button class="btn-secondary" @click="downloadAllHtml">下载全部 HTML</button>
             <button v-if="ttsMode !== 'none'" class="btn-secondary" :disabled="ttsPreviewing" @click="previewTTS">
               <span v-if="ttsPreviewing" class="spinner-small" />
-              {{ ttsPreviewing ? "预览中..." : "预览语音" }}
+              {{ ttsPreviewing ? "处理中..." : "预览语音" }}
+            </button>
+            <button v-if="ttsMode !== 'none'" class="btn-secondary" :disabled="ttsPreviewing" @click="downloadTTS">
+              下载配音 MP3
             </button>
             <button class="btn-primary" :disabled="rendering" @click="downloadAllVideo">
               <span v-if="rendering" class="spinner" />
@@ -363,15 +485,39 @@ async function handleRegenerate(idx: number) {
         </div>
         <p class="preview-hint">点击场景卡片切换预览 · 支持单场景下载和重新生成</p>
       </section>
+
+      <!-- 历史面板 -->
+      <section v-if="showHistory" class="history-panel">
+        <h3>生成历史</h3>
+        <div v-if="historyLoading" class="history-loading">加载中...</div>
+        <div v-else-if="historyList.length === 0" class="history-empty">暂无历史记录，生成第一个视频吧</div>
+        <div v-else class="history-list">
+          <div v-for="h in historyList" :key="h.id" class="history-item" @click="restoreHistory(h.id)">
+            <div class="history-item-header">
+              <span class="history-title">{{ h.title || '未命名' }}</span>
+              <span class="history-time">{{ h.created_at?.slice(0, 16)?.replace('T', ' ') }}</span>
+            </div>
+            <div class="history-prompt">{{ h.prompt }}</div>
+            <div class="history-meta">
+              <span>{{ h.scene_count }}个场景</span>
+              <span>{{ h.total_duration }}秒</span>
+              <span>{{ h.aspect }}</span>
+            </div>
+            <button class="history-del" @click.stop="removeHistory(h.id)" title="删除">✕</button>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 </template>
 
 <style scoped>
 .home { min-height: 100vh; background: linear-gradient(135deg, #0a0a1a 0%, #1a1a3e 50%, #0d0d2b 100%); }
-.header { display: flex; align-items: center; padding: 14px 28px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .logo { display: flex; align-items: center; gap: 8px; }
 .logo-text { font-size: 17px; font-weight: 600; background: linear-gradient(135deg,#6366f1,#a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.btn-history { padding: 6px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 7px; color: #c4b5fd; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.btn-history:hover { background: rgba(139,92,246,0.15); }
 .main { max-width: 960px; margin: 0 auto; padding: 32px 20px; }
 .hero { text-align: center; padding-top: 40px; }
 .hero.compact { padding-top: 0; }
@@ -402,6 +548,7 @@ h1 { font-size: 36px; font-weight: 700; background: linear-gradient(135deg,#e0e0
 .subtitle-toggle { display: flex; align-items: center; gap: 6px; }
 .toggle-btn { padding: 3px 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #9ca3af; font-size: 12px; cursor: pointer; transition: all 0.2s; }
 .toggle-btn.on { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.3); color: #4ade80; }
+.toggle-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .btn-generate { display: inline-flex; align-items: center; gap: 6px; padding: 9px 24px; background: linear-gradient(135deg,#6366f1,#8b5cf6); color: #fff; border: none; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .btn-generate:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
@@ -457,4 +604,22 @@ h1 { font-size: 36px; font-weight: 700; background: linear-gradient(135deg,#e0e0
 .preview-container { position: relative; width: 100%; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.06); }
 .preview-frame { width: 100%; height: 100%; border: none; }
 .preview-hint { text-align: center; color: #6b7280; font-size: 11px; margin-top: 8px; }
+
+/* History panel */
+.history-panel { margin-top: 40px; padding: 24px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; }
+.history-panel h3 { font-size: 16px; color: #c4b5fd; margin-bottom: 16px; }
+.history-loading, .history-empty { color: #6b7280; font-size: 13px; text-align: center; padding: 20px 0; }
+.history-list { display: flex; flex-direction: column; gap: 8px; }
+.history-item { position: relative; padding: 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 9px; cursor: pointer; transition: all 0.15s; }
+.history-item:hover { background: rgba(139,92,246,0.08); border-color: rgba(139,92,246,0.15); }
+.history-item-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.history-title { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+.history-time { font-size: 11px; color: #6b7280; }
+.history-prompt { font-size: 12px; color: #9ca3af; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { display: flex; gap: 14px; font-size: 11px; color: #6b7280; }
+.history-del { position: absolute; top: 10px; right: 12px; padding: 2px 7px; background: transparent; border: none; color: #6b7280; font-size: 12px; cursor: pointer; border-radius: 4px; }
+.history-del:hover { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+.back-btn { padding: 4px 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #9ca3af; font-size: 12px; cursor: pointer; margin-bottom: 6px; transition: all 0.2s; }
+.back-btn:hover { background: rgba(139,92,246,0.1); color: #c4b5fd; }
 </style>
