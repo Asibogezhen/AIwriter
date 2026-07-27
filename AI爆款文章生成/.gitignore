@@ -16,19 +16,9 @@ venv/
 .vscode/
 *.swp
 
-# Claude Code
-.claude/
-
 # OS
 .DS_Store
 Thumbs.db
-
-# Screenshots
-*.jpeg
-*.jpg
-*.png
-!frontend/src/assets/*.png
-!frontend/public/*.svg
 
 # Docker
 data/
