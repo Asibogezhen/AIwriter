@@ -21,8 +21,8 @@ async def get_current_user(authorization: str = Header(None)) -> dict:
         raise BusinessException(ErrorCode.UNAUTHORIZED)
 
     user_id = payload.get("sub")
-    query = f"SELECT id, email, nickname, is_vip, free_quota, is_admin FROM users WHERE id = '{user_id}'"
-    row = await database.fetch_one(query)
+    query = "SELECT id, email, nickname, is_vip, free_quota, is_admin FROM users WHERE id = :id"
+    row = await database.fetch_one(query, {"id": user_id})
     if not row:
         raise BusinessException(ErrorCode.UNAUTHORIZED, "用户不存在")
 
